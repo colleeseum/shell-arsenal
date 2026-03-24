@@ -1,0 +1,1 @@
+alias fbe='firebase emulators:start --import=./emulator-data --export-on-exit=./emulator-data'

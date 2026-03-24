@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: kalloc [--verbose]
+
+Show per-node Kubernetes allocatable and effective free CPU/memory after
+subtracting kube-system resource requests.
+
+Options:
+  -v, --verbose  Show additional raw CPU and memory units for every section.
+  -h, --help     Show this help text.
+EOF
+}
+
+verbose=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -v|--verbose)
+      verbose=true
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      printf 'kalloc: unknown option: %s\n\n' "$1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+jq -r -n \
+  --argjson verbose "$verbose" \
+  --slurpfile nodes <(kubectl get nodes -o json) \
+  --slurpfile pods <(kubectl get pods -A -o json) '
+  def parse_cpu:
+    if . == null then 0
+    elif type == "number" then .
+    elif type == "string" and test("m$") then
+      sub("m$"; "") | tonumber / 1000
+    elif type == "string" then
+      tonumber
+    else
+      0
+    end;
+
+  def parse_mem_gi:
+    if . == null then 0
+    elif type == "number" then .
+    elif type == "string" and test("Ki$") then
+      sub("Ki$"; "") | tonumber / 1024 / 1024
+    elif type == "string" and test("Mi$") then
+      sub("Mi$"; "") | tonumber / 1024
+    elif type == "string" and test("Gi$") then
+      sub("Gi$"; "") | tonumber
+    elif type == "string" and test("Ti$") then
+      sub("Ti$"; "") | tonumber * 1024
+    elif type == "string" then
+      tonumber
+    else
+      0
+    end;
+
+  def fmt1:
+    . * 10
+    | round
+    / 10
+    | tostring
+    | sub("\\.0$"; "");
+
+  def cpu_to_m($raw):
+    if ($raw | tostring | test("m$")) then
+      $raw
+    else
+      ($raw | tonumber * 1000 | round | tostring + "m")
+    end;
+
+  def gi_to_ki:
+    (. * 1024 * 1024 | round | tostring + "Ki");
+
+  def kube_usage_by_node:
+    ($pods[0].items // [])
+    | map(select(.metadata.namespace == "kube-system" and .spec.nodeName != null))
+    | reduce .[] as $p ({};
+        .[$p.spec.nodeName] |= (
+          . // {cpu: 0, mem: 0}
+          | .cpu += (
+              $p.spec.containers
+              | map(.resources.requests.cpu // "0" | parse_cpu)
+              | add
+            )
+          | .mem += (
+              $p.spec.containers
+              | map(.resources.requests.memory // "0" | parse_mem_gi)
+              | add
+            )
+        )
+      );
+
+  def compact_output($name; $acpu_raw; $ccpu_raw; $amem_raw; $cmem_raw; $acpu_cores; $ccpu_cores; $amem_gi; $cmem_gi; $ks_cpu; $ks_mem; $free_cpu; $free_mem):
+    "Node: \($name)
+  Allocatable:        CPU=\($acpu_cores | fmt1) cores (\(cpu_to_m($acpu_raw)))   Mem=\($amem_gi | fmt1) Gi (\($amem_raw))
+  Capacity:           CPU=\($ccpu_cores | fmt1) cores (\(cpu_to_m($ccpu_raw)))   Mem=\($cmem_gi | fmt1) Gi (\($cmem_raw))
+  kube-system usage:  CPU=\($ks_cpu | fmt1) cores                               Mem=\($ks_mem | fmt1) Gi
+  Effective free:     CPU=\($free_cpu | fmt1) cores                             Mem=\($free_mem | fmt1) Gi
+";
+
+  def verbose_output($name; $acpu_raw; $ccpu_raw; $amem_raw; $cmem_raw; $acpu_cores; $ccpu_cores; $amem_gi; $cmem_gi; $ks_cpu; $ks_mem; $free_cpu; $free_mem):
+    "Node: \($name)
+  Allocatable:        CPU=\($acpu_cores | fmt1) cores (\(cpu_to_m($acpu_raw)))   Mem=\($amem_gi | fmt1) Gi (\($amem_raw // ($amem_gi | gi_to_ki)))
+  Capacity:           CPU=\($ccpu_cores | fmt1) cores (\(cpu_to_m($ccpu_raw)))   Mem=\($cmem_gi | fmt1) Gi (\($cmem_raw // ($cmem_gi | gi_to_ki)))
+  kube-system usage:  CPU=\($ks_cpu | fmt1) cores (\(cpu_to_m($ks_cpu)))   Mem=\($ks_mem | fmt1) Gi (\($ks_mem | gi_to_ki))
+  Effective free:     CPU=\($free_cpu | fmt1) cores (\(cpu_to_m($free_cpu)))   Mem=\($free_mem | fmt1) Gi (\($free_mem | gi_to_ki))
+";
+
+  (kube_usage_by_node) as $ku
+  | ($nodes[0].items // [])[]
+  | .metadata.name as $name
+  | .status.allocatable.cpu as $acpu_raw
+  | .status.capacity.cpu as $ccpu_raw
+  | .status.allocatable.memory as $amem_raw
+  | .status.capacity.memory as $cmem_raw
+  | ($acpu_raw | parse_cpu) as $acpu_cores
+  | ($ccpu_raw | parse_cpu) as $ccpu_cores
+  | ($amem_raw | parse_mem_gi) as $amem_gi
+  | ($cmem_raw | parse_mem_gi) as $cmem_gi
+  | ($ku[$name].cpu // 0) as $ks_cpu
+  | ($ku[$name].mem // 0) as $ks_mem
+  | ($acpu_cores - $ks_cpu) as $free_cpu
+  | ($amem_gi - $ks_mem) as $free_mem
+  | if $verbose then
+      verbose_output($name; $acpu_raw; $ccpu_raw; $amem_raw; $cmem_raw; $acpu_cores; $ccpu_cores; $amem_gi; $cmem_gi; $ks_cpu; $ks_mem; $free_cpu; $free_mem)
+    else
+      compact_output($name; $acpu_raw; $ccpu_raw; $amem_raw; $cmem_raw; $acpu_cores; $ccpu_cores; $amem_gi; $cmem_gi; $ks_cpu; $ks_mem; $free_cpu; $free_mem)
+    end
+'

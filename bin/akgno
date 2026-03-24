@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: akgno
+
+Print `kubectl get nodes -o wide` with an extra `POOL` column from the
+EKS nodegroup label `eks.amazonaws.com/nodegroup`.
+
+Options:
+  -h, --help  Show this help text.
+EOF
+}
+
+case "${1-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    printf 'akgno: this command does not accept arguments: %s\n\n' "$1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+kubectl get nodes -o wide | awk 'NR==1 {print $0, "POOL"; next} {print}' | \
+while read -r line; do
+  if [[ "$line" == NAME* ]]; then
+    echo "$line"
+    continue
+  fi
+
+  node="$(awk '{print $1}' <<<"$line")"
+  pool="$(kubectl get node "$node" -o jsonpath='{.metadata.labels.eks\.amazonaws\.com/nodegroup}')"
+
+  echo "$line $pool"
+done

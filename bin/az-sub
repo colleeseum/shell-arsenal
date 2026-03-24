@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: az-sub
+
+Interactively select an Azure subscription with `fzf` and set it as the
+active subscription for the Azure CLI.
+
+Dependencies:
+  - az
+  - fzf
+
+Options:
+  -h, --help  Show this help text.
+EOF
+}
+
+case "${1-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  "")
+    ;;
+  *)
+    printf 'az-sub: this command does not accept arguments: %s\n\n' "$1" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
+
+selection="$(
+  az account list --query "[].{name:name,id:id}" -o tsv \
+    | awk -F'\t' '{print $1 "\t" $2}' \
+    | fzf --with-nth=1
+)"
+
+[[ -n "$selection" ]] || exit 0
+
+subscription_id="$(awk -F'\t' '{print $2}' <<<"$selection")"
+[[ -n "$subscription_id" ]] || exit 1
+
+az account set -s "$subscription_id"

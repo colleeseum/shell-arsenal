@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bru_body [bru-run-args...]
+
+Run `bru run` against the configured Bruno collection and print the first
+response body from the generated JSON report.
+
+Environment:
+  BRU_COLLECTION_ROOT  Override the Bruno collection directory.
+                       Default: /Users/serge/clone/helm/bruno-collections/collections/voicebox
+
+Options:
+  -h, --help  Show this help text.
+EOF
+}
+
+case "${1-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+
+collection_root="${BRU_COLLECTION_ROOT:-/Users/serge/clone/helm/bruno-collections/collections/voicebox}"
+tmp="$(mktemp)"
+
+cleanup() {
+  rm -f "$tmp"
+}
+
+trap cleanup EXIT
+
+if [[ ! -d "$collection_root" ]]; then
+  printf 'bru_body: collection root not found: %s\n' "$collection_root" >&2
+  exit 1
+fi
+
+pushd "$collection_root" >/dev/null
+bru run "$@" --reporter-json "$tmp" >/dev/null
+popd >/dev/null
+
+jq '.[0].results[0].response.data' "$tmp"

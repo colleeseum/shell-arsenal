@@ -1,0 +1,8 @@
+alias kgc='kubectl get certificates'
+alias kdelc='kubectl delete certificate'
+alias kdc='kubectl describe certificates'
+alias kgcr='kubectl get certificaterequest'
+alias kdcr='kubectl describe certificaterequest'
+alias kgo='kubectl get order'
+alias kdo='kubectl describe order'
+alias kge='kubectl get events --watch'
