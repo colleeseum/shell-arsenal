@@ -52,7 +52,7 @@ Keep versioned Homebrew, app bundle, SDK, and other machine-specific PATH entrie
 | File | Purpose |
 | --- | --- |
 | `aliases/common.sh` | Generic shell aliases that are safe to keep broadly enabled. |
-| `aliases/kubectl.sh` | Kubernetes and cert-manager shortcuts. |
+| `aliases/kubectl.sh` | Kubernetes and cert-manager shortcuts. not provided by zsh plugin|
 | `aliases/firebase.sh` | Firebase emulator shortcuts. |
 
 ## Utilities
