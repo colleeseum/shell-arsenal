@@ -1,0 +1,403 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_name="$(basename "$0")"
+codex_home="${CODEX_HOME:-$HOME/.codex}"
+session_index="${codex_home}/session_index.jsonl"
+sessions_root="${codex_home}/sessions"
+state_root="${codex_home}/memories/pr-review-sessions"
+desired_gh_user="${CODEX_PR_REVIEW_GH_USER:-colleeseum}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  codex-pr-review [options] <pr-number>
+  codex-pr-review list
+  codex-pr-review forget <pr-number>
+  codex-pr-review gc
+
+Review a GitHub PR in Codex with a stable prompt and one reusable Codex
+conversation per repo/PR.
+
+Commands:
+  <pr-number>         Start or resume the saved Codex session for that PR.
+  list                Show saved PR review sessions for the current repo.
+  forget <pr-number>  Remove the saved session mapping for that PR.
+  gc                  Remove broken mappings for the current repo.
+
+Options:
+  --base <branch>     Base branch to review against. Default: main
+  --new               Force a new Codex conversation for this PR.
+  --local-only        Review locally only. Do not ask Codex to post to GitHub.
+  GitHub authoring    Switches gh to this account before review posting:
+                      colleeseum
+  -h, --help          Show this help text.
+
+Examples:
+  codex-pr-review 11
+  codex-pr-review --base release/1.2 27
+  codex-pr-review --local-only --new 11
+  codex-pr-review list
+  codex-pr-review forget 11
+EOF
+}
+
+die() {
+  printf '%s\n' "$script_name: $*" >&2
+  exit 1
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+ensure_gh_account() {
+  local status current
+
+  require_cmd gh
+
+  status="$(gh auth status 2>/dev/null || true)"
+  if [[ -z "$status" ]]; then
+    die "gh is not authenticated; run 'gh auth login' first"
+  fi
+
+  current="$(
+    printf '%s\n' "$status" | awk '
+      /Logged in to github.com account / { account=$7 }
+      /Active account: true/ { print account; exit }
+    '
+  )"
+
+  if [[ -z "$current" ]]; then
+    die "gh has no active authenticated account; run 'gh auth login' first"
+  fi
+
+  if [[ "$current" != "$desired_gh_user" ]]; then
+    gh auth switch -u "$desired_gh_user" >/dev/null
+  fi
+}
+
+repo_slug() {
+  local url
+
+  url="$(git remote get-url origin 2>/dev/null)" || die "not in a git repo with an origin remote"
+  url="${url%.git}"
+
+  case "$url" in
+    git@github.com:*)
+      printf '%s\n' "${url#git@github.com:}"
+      ;;
+    https://github.com/*)
+      printf '%s\n' "${url#https://github.com/}"
+      ;;
+    ssh://git@github.com/*)
+      printf '%s\n' "${url#ssh://git@github.com/}"
+      ;;
+    *)
+      die "unsupported GitHub remote URL: $url"
+      ;;
+  esac
+}
+
+repo_key() {
+  local slug="$1"
+  printf '%s\n' "${slug//\//__}"
+}
+
+repo_state_dir() {
+  local slug="$1"
+  printf '%s/%s\n' "$state_root" "$(repo_key "$slug")"
+}
+
+state_file() {
+  local slug="$1"
+  local pr="$2"
+  printf '%s/pr-%s.env\n' "$(repo_state_dir "$slug")" "$pr"
+}
+
+prompt_text() {
+  local pr="$1"
+  local base="$2"
+  local local_only="$3"
+
+  if [[ "$local_only" == "1" ]]; then
+    cat <<EOF
+Review PR #$pr against $base as a normal PR review.
+Findings first, ordered by severity.
+Focus on correctness, regressions, and missing tests.
+Do not post anything to GitHub.
+If there are no material findings, say so explicitly.
+Give me a short summary afterward.
+EOF
+  else
+    cat <<EOF
+Review PR #$pr against $base as a normal PR review.
+Findings first, ordered by severity.
+Focus on correctness, regressions, and missing tests.
+When posting comments to GitHub, use the local gh CLI rather than GitHub app integration so the comment author stays on the active gh account.
+Post inline GitHub review comments for file-specific issues.
+Use a top-level PR comment only for cross-file findings or issues that cannot be anchored cleanly.
+Do not post anything to GitHub until you have the final set of findings.
+If there are no material findings, tell me locally and do not leave a PR comment.
+Give me a short summary afterward.
+EOF
+  fi
+}
+
+save_state() {
+  local path="$1"
+  local slug="$2"
+  local pr="$3"
+  local base="$4"
+  local session_id="$5"
+
+  mkdir -p "$(dirname "$path")"
+  cat >"$path" <<EOF
+repo_slug=$slug
+pr=$pr
+base_branch=$base
+cwd=$PWD
+session_id=$session_id
+saved_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+}
+
+load_state() {
+  local path="$1"
+
+  [[ -f "$path" ]] || return 1
+  # shellcheck disable=SC1090
+  source "$path"
+}
+
+session_file_exists() {
+  local session_id="$1"
+  find "$sessions_root" -type f -name "*-${session_id}.jsonl" -print -quit 2>/dev/null | grep -q .
+}
+
+session_id_from_newest_file() {
+  local stamp="$1"
+  local newest
+
+  newest="$(
+    find "$sessions_root" -type f -name '*.jsonl' -newer "$stamp" -print 2>/dev/null \
+      | sort \
+      | tail -n 1
+  )"
+
+  [[ -n "$newest" ]] || return 1
+  basename "$newest" | sed -E 's/.*-([0-9a-f-]{36})\.jsonl/\1/'
+}
+
+run_codex_new() {
+  local slug="$1"
+  local pr="$2"
+  local base="$3"
+  local local_only="$4"
+  local path="$5"
+  local prompt stamp session_id rc
+
+  if [[ "$local_only" != "1" ]]; then
+    ensure_gh_account
+  fi
+
+  prompt="$(prompt_text "$pr" "$base" "$local_only")"
+  stamp="$(mktemp /tmp/codex-pr-review.XXXXXX)"
+  touch "$stamp"
+
+  set +e
+  codex --cd "$PWD" "$prompt"
+  rc=$?
+  set -e
+
+  session_id=""
+  if session_id="$(session_id_from_newest_file "$stamp" 2>/dev/null)"; then
+    save_state "$path" "$slug" "$pr" "$base" "$session_id"
+  fi
+
+  rm -f "$stamp"
+  return "$rc"
+}
+
+run_codex_resume() {
+  local slug="$1"
+  local pr="$2"
+  local base="$3"
+  local local_only="$4"
+  local path="$5"
+  local prompt rc
+
+  if ! load_state "$path"; then
+    run_codex_new "$slug" "$pr" "$base" "$local_only" "$path"
+    return
+  fi
+
+  if [[ -z "${session_id:-}" ]] || ! session_file_exists "$session_id"; then
+    rm -f "$path"
+    run_codex_new "$slug" "$pr" "$base" "$local_only" "$path"
+    return
+  fi
+
+  if [[ "$local_only" != "1" ]]; then
+    ensure_gh_account
+  fi
+
+  prompt="$(prompt_text "$pr" "$base" "$local_only")"
+
+  set +e
+  codex resume --cd "$PWD" "$session_id" "$prompt"
+  rc=$?
+  set -e
+
+  if [[ "$rc" -ne 0 ]]; then
+    rm -f "$path"
+    run_codex_new "$slug" "$pr" "$base" "$local_only" "$path"
+    return
+  fi
+}
+
+list_states() {
+  local slug="$1"
+  local dir path
+
+  dir="$(repo_state_dir "$slug")"
+  if [[ ! -d "$dir" ]]; then
+    printf 'No saved PR review sessions for %s\n' "$slug"
+    return 0
+  fi
+
+  printf '%-8s %-36s %-20s %s\n' "PR" "SESSION_ID" "BASE" "SAVED_AT"
+  for path in "$dir"/pr-*.env; do
+    [[ -e "$path" ]] || continue
+    unset repo_slug pr base_branch cwd session_id saved_at
+    load_state "$path" || continue
+    printf '%-8s %-36s %-20s %s\n' "${pr:-?}" "${session_id:-missing}" "${base_branch:-main}" "${saved_at:-unknown}"
+  done | sort -n
+}
+
+forget_state() {
+  local slug="$1"
+  local pr="$2"
+  local path
+
+  path="$(state_file "$slug" "$pr")"
+  [[ -f "$path" ]] || die "no saved session mapping for PR #$pr"
+  rm -f "$path"
+  printf 'Forgot saved session mapping for %s PR #%s\n' "$slug" "$pr"
+}
+
+gc_states() {
+  local slug="$1"
+  local dir path removed
+
+  dir="$(repo_state_dir "$slug")"
+  if [[ ! -d "$dir" ]]; then
+    printf 'No saved PR review sessions for %s\n' "$slug"
+    return 0
+  fi
+
+  removed=0
+  for path in "$dir"/pr-*.env; do
+    [[ -e "$path" ]] || continue
+    unset session_id
+    load_state "$path" || continue
+    if [[ -z "${session_id:-}" ]] || ! session_file_exists "$session_id"; then
+      rm -f "$path"
+      removed=$((removed + 1))
+    fi
+  done
+
+  printf 'Removed %d broken mapping(s) for %s\n' "$removed" "$slug"
+}
+
+main() {
+  local base_branch="main"
+  local force_new=0
+  local local_only=0
+  local command=""
+  local pr=""
+  local slug path
+
+  require_cmd codex
+  require_cmd git
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --base)
+        [[ $# -ge 2 ]] || die "--base requires a branch name"
+        base_branch="$2"
+        shift 2
+        ;;
+      --new)
+        force_new=1
+        shift
+        ;;
+      --local-only)
+        local_only=1
+        shift
+        ;;
+      list|gc)
+        command="$1"
+        shift
+        ;;
+      forget)
+        command="$1"
+        [[ $# -ge 2 ]] || die "forget requires a PR number"
+        pr="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        if [[ -n "$command" ]]; then
+          die "unexpected extra argument: $1"
+        fi
+        if [[ -n "$pr" ]]; then
+          die "only one PR number is allowed"
+        fi
+        pr="$1"
+        shift
+        ;;
+    esac
+  done
+
+  slug="$(repo_slug)"
+
+  case "$command" in
+    list)
+      list_states "$slug"
+      return
+      ;;
+    gc)
+      gc_states "$slug"
+      return
+      ;;
+    forget)
+      forget_state "$slug" "$pr"
+      return
+      ;;
+    "")
+      ;;
+    *)
+      die "unknown command: $command"
+      ;;
+  esac
+
+  [[ -n "$pr" ]] || die "a PR number is required"
+  [[ "$pr" =~ ^[0-9]+$ ]] || die "PR number must be numeric"
+
+  path="$(state_file "$slug" "$pr")"
+
+  if [[ "$force_new" -eq 1 ]]; then
+    run_codex_new "$slug" "$pr" "$base_branch" "$local_only" "$path"
+  else
+    run_codex_resume "$slug" "$pr" "$base_branch" "$local_only" "$path"
+  fi
+}
+
+main "$@"
