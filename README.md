@@ -63,4 +63,22 @@ Keep versioned Homebrew, app bundle, SDK, and other machine-specific PATH entrie
 | `az-sub` | Interactively pick an Azure subscription with `fzf` and set it as the active Azure CLI subscription. |
 | `bru_body` | Run a Bruno collection and print the first response body from the JSON report. |
 | `kalloc` | Show per-node Kubernetes allocatable and effective free CPU and memory after subtracting `kube-system` requests. |
-| `klogmsg` | Read `kubectl logs` output and extract JSON `message` fields into a single-line view; use `-f` to follow. |
+
+## Kubernetes Log JSON
+
+These helpers live in `aliases/kubectl.sh`:
+
+| Helper | Description |
+| --- | --- |
+| `jcat` | Parse newline-delimited JSON from stdin or files, optionally apply a jq filter with `-q` or `--query`, and prefix output lines by default. Use `--no-bullet` to disable prefixes. |
+| `kljq` | Run `kl` and parse each log line as JSON. |
+| `klfjq` | Run `kl -f` and parse each followed log line as JSON. |
+| `klq` | Run `kl`, parse each log line as JSON, optionally apply a jq filter with `-q` or `--query`, and prefix output lines by default. Use `--no-bullet` to disable prefixes. Without a filter, it applies the identity jq filter. |
+
+Examples:
+
+```sh
+jcat ~/Downloads/vbox.log -q 'select(.level == "ERROR") | .message // empty'
+klq -n default my-pod -q 'select(.level == "ERROR") | .message // empty'
+klq -n default my-pod --no-bullet
+```

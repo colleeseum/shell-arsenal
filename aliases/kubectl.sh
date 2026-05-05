@@ -8,7 +8,41 @@ alias kdo='kubectl describe order'
 alias kge='kubectl get events --watch'
 
 jcat() {
-  jq -R 'fromjson' "$@"
+  local filter="."
+  local bullet=true
+  local -a inputs=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -b|--bullet)
+        bullet=true
+        shift
+        ;;
+      --no-bullet|--nobullet)
+        bullet=false
+        shift
+        ;;
+      -q|--query)
+        filter="${2:?missing jq filter for $1}"
+        shift 2
+        ;;
+      --)
+        shift
+        inputs+=("$@")
+        break
+        ;;
+      *)
+        inputs+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ "$bullet" == true ]]; then
+    jq -Rr "fromjson? | $filter" "${inputs[@]}" | sed 's/^/- /'
+  else
+    jq -Rr "fromjson? | $filter" "${inputs[@]}"
+  fi
 }
 
 kljq() {
@@ -19,6 +53,44 @@ klfjq() {
   kl -f "$@" | jq -R 'fromjson'
 }
 
+klq() {
+  local filter="."
+  local bullet=true
+  local -a log_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -b|--bullet)
+        bullet=true
+        shift
+        ;;
+      --no-bullet|--nobullet)
+        bullet=false
+        shift
+        ;;
+      -q|--query)
+        filter="${2:?missing jq filter for $1}"
+        shift 2
+        ;;
+      --)
+        shift
+        log_args+=("$@")
+        break
+        ;;
+      *)
+        log_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ "$bullet" == true ]]; then
+    kl "${log_args[@]}" | jq -Rr "fromjson? | $filter" | sed 's/^/- /'
+  else
+    kl "${log_args[@]}" | jq -Rr "fromjson? | $filter"
+  fi
+}
+
 if [[ -n ${ZSH_VERSION-} ]] && (( $+functions[compdef] )); then
   _shell_arsenal_kubectl_pods() {
     local -a pods
@@ -26,5 +98,5 @@ if [[ -n ${ZSH_VERSION-} ]] && (( $+functions[compdef] )); then
     _describe -t pods 'pods' pods
   }
 
-  compdef _shell_arsenal_kubectl_pods kljq klfjq
+  compdef _shell_arsenal_kubectl_pods kljq klfjq klq
 fi
