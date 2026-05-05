@@ -24,7 +24,7 @@ jcat() {
         bullet=false
         shift
         ;;
-      --errors)
+      --error|--errors)
         filter='select(.level == "ERROR") | "\(.timestamp // .time // .ts // .["@timestamp"] // "")   \(.message // "")"'
         query_used=true
         errors=true
@@ -62,15 +62,9 @@ jcat() {
   fi
 }
 
-kljq() {
-  kl "$@" | jq -R 'fromjson'
-}
-
-klfjq() {
-  kl -f "$@" | jq -R 'fromjson'
-}
-
-klq() {
+_shell_arsenal_log_json() {
+  local follow="$1"
+  shift
   local filter="."
   local bullet="auto"
   local query_used=false
@@ -87,7 +81,7 @@ klq() {
         bullet=false
         shift
         ;;
-      --errors)
+      --error|--errors)
         filter='select(.level == "ERROR") | "\(.timestamp // .time // .ts // .["@timestamp"] // "")   \(.message // "")"'
         query_used=true
         errors=true
@@ -118,11 +112,23 @@ klq() {
     fi
   fi
 
+  if [[ "$follow" == true ]]; then
+    log_args=(-f "${log_args[@]}")
+  fi
+
   if [[ "$bullet" == true && "$query_used" == true ]]; then
     kl "${log_args[@]}" | jq -Rr "fromjson? | $filter" | sed 's/^/- /'
   else
     kl "${log_args[@]}" | jq -Rr "fromjson? | $filter"
   fi
+}
+
+kljq() {
+  _shell_arsenal_log_json false "$@"
+}
+
+klfjq() {
+  _shell_arsenal_log_json true "$@"
 }
 
 if [[ -n ${ZSH_VERSION-} ]] && (( $+functions[compdef] )); then
@@ -132,5 +138,5 @@ if [[ -n ${ZSH_VERSION-} ]] && (( $+functions[compdef] )); then
     _describe -t pods 'pods' pods
   }
 
-  compdef _shell_arsenal_kubectl_pods kljq klfjq klq
+  compdef _shell_arsenal_kubectl_pods kljq klfjq
 fi

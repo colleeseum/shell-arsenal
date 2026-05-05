@@ -70,16 +70,16 @@ These helpers live in `aliases/kubectl.sh`:
 
 | Helper | Description |
 | --- | --- |
-| `jcat` | Parse newline-delimited JSON from stdin or files. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--errors` prints error timestamps and messages. |
-| `kljq` | Run `kl` and parse each log line as JSON. |
-| `klfjq` | Run `kl -f` and parse each followed log line as JSON. |
-| `klq` | Run `kl` and parse each log line as JSON. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--errors` prints error timestamps and messages. |
+| `jcat` | Parse newline-delimited JSON from stdin or files. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--error` prints error timestamps and messages. |
+| `kljq` | Run `kl` and parse each log line as JSON. Supports the same `-q`/`--query` and `--error` options as `jcat`. |
+| `klfjq` | Run `kl -f` and parse each followed log line as JSON. Supports the same `-q`/`--query` and `--error` options as `jcat`. |
 
 Examples:
 
 ```sh
-jcat ~/Downloads/vbox.log --errors
+jcat ~/Downloads/vbox.log --error
 jcat ~/Downloads/vbox.log -q 'select(.level == "ERROR") | .message // empty'
-klq -n default my-pod --errors
-klq -n default my-pod
+kljq -n default my-pod --error
+klfjq -n default my-pod --error
+kljq -n default my-pod
 ```
