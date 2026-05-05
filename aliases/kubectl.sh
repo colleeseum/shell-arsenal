@@ -9,7 +9,9 @@ alias kge='kubectl get events --watch'
 
 jcat() {
   local filter="."
-  local bullet=true
+  local bullet="auto"
+  local query_used=false
+  local errors=false
   local -a inputs=()
 
   while [[ $# -gt 0 ]]; do
@@ -22,8 +24,15 @@ jcat() {
         bullet=false
         shift
         ;;
+      --errors)
+        filter='select(.level == "ERROR") | "\(.timestamp // .time // .ts // .["@timestamp"] // "")   \(.message // "")"'
+        query_used=true
+        errors=true
+        shift
+        ;;
       -q|--query)
         filter="${2:?missing jq filter for $1}"
+        query_used=true
         shift 2
         ;;
       --)
@@ -38,7 +47,15 @@ jcat() {
     esac
   done
 
-  if [[ "$bullet" == true ]]; then
+  if [[ "$bullet" == "auto" ]]; then
+    if [[ "$query_used" == true && "$errors" == false ]]; then
+      bullet=true
+    else
+      bullet=false
+    fi
+  fi
+
+  if [[ "$bullet" == true && "$query_used" == true ]]; then
     jq -Rr "fromjson? | $filter" "${inputs[@]}" | sed 's/^/- /'
   else
     jq -Rr "fromjson? | $filter" "${inputs[@]}"
@@ -55,7 +72,9 @@ klfjq() {
 
 klq() {
   local filter="."
-  local bullet=true
+  local bullet="auto"
+  local query_used=false
+  local errors=false
   local -a log_args=()
 
   while [[ $# -gt 0 ]]; do
@@ -68,8 +87,15 @@ klq() {
         bullet=false
         shift
         ;;
+      --errors)
+        filter='select(.level == "ERROR") | "\(.timestamp // .time // .ts // .["@timestamp"] // "")   \(.message // "")"'
+        query_used=true
+        errors=true
+        shift
+        ;;
       -q|--query)
         filter="${2:?missing jq filter for $1}"
+        query_used=true
         shift 2
         ;;
       --)
@@ -84,7 +110,15 @@ klq() {
     esac
   done
 
-  if [[ "$bullet" == true ]]; then
+  if [[ "$bullet" == "auto" ]]; then
+    if [[ "$query_used" == true && "$errors" == false ]]; then
+      bullet=true
+    else
+      bullet=false
+    fi
+  fi
+
+  if [[ "$bullet" == true && "$query_used" == true ]]; then
     kl "${log_args[@]}" | jq -Rr "fromjson? | $filter" | sed 's/^/- /'
   else
     kl "${log_args[@]}" | jq -Rr "fromjson? | $filter"

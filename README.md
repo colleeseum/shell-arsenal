@@ -70,15 +70,16 @@ These helpers live in `aliases/kubectl.sh`:
 
 | Helper | Description |
 | --- | --- |
-| `jcat` | Parse newline-delimited JSON from stdin or files, optionally apply a jq filter with `-q` or `--query`, and prefix output lines by default. Use `--no-bullet` to disable prefixes. |
+| `jcat` | Parse newline-delimited JSON from stdin or files. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--errors` prints error timestamps and messages. |
 | `kljq` | Run `kl` and parse each log line as JSON. |
 | `klfjq` | Run `kl -f` and parse each followed log line as JSON. |
-| `klq` | Run `kl`, parse each log line as JSON, optionally apply a jq filter with `-q` or `--query`, and prefix output lines by default. Use `--no-bullet` to disable prefixes. Without a filter, it applies the identity jq filter. |
+| `klq` | Run `kl` and parse each log line as JSON. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--errors` prints error timestamps and messages. |
 
 Examples:
 
 ```sh
+jcat ~/Downloads/vbox.log --errors
 jcat ~/Downloads/vbox.log -q 'select(.level == "ERROR") | .message // empty'
-klq -n default my-pod -q 'select(.level == "ERROR") | .message // empty'
-klq -n default my-pod --no-bullet
+klq -n default my-pod --errors
+klq -n default my-pod
 ```
