@@ -66,20 +66,29 @@ Keep versioned Homebrew, app bundle, SDK, and other machine-specific PATH entrie
 
 ## Kubernetes Log JSON
 
-These helpers live in `aliases/kubectl.sh`:
+These helpers live in `aliases/log-json.sh`:
 
 | Helper | Description |
 | --- | --- |
-| `jcat` | Parse newline-delimited JSON from stdin or files. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--error` prints error timestamps and messages. |
+| `jcat` | Parse newline-delimited JSON from stdin or files. `--yaml` renders objects as YAML with multiline strings, using `yq` when available. `--fields` projects comma-separated fields and omits missing fields. `-q`/`--query` applies a jq filter and prefixes output lines by default. `--error` prints ERROR timestamps, messages, and `stack_info` when present. Use `--no-stack` to suppress stacks. `--message` prints all timestamps and messages. |
 | `kljq` | Run `kl` and parse each log line as JSON. Supports the same `-q`/`--query` and `--error` options as `jcat`. |
 | `klfjq` | Run `kl -f` and parse each followed log line as JSON. Supports the same `-q`/`--query` and `--error` options as `jcat`. |
+
+Pass `-h` or `--help` to any helper for usage.
+Selected string values with embedded newlines are rendered with continuation indentation. Use `--yaml` to render multiline fields in full objects with real line breaks.
 
 Examples:
 
 ```sh
 jcat ~/Downloads/vbox.log --error
+jcat ~/Downloads/vbox.log --error --no-stack
+jcat ~/Downloads/vbox.log --message
+jcat ~/Downloads/vbox.log --yaml
+jcat ~/Downloads/vbox.log --fields message,stack_info --yaml
+jcat ~/Downloads/vbox.log -q '.exc_info // empty'
 jcat ~/Downloads/vbox.log -q 'select(.level == "ERROR") | .message // empty'
 kljq -n default my-pod --error
+kljq -n default my-pod --message
 klfjq -n default my-pod --error
 kljq -n default my-pod
 ```
